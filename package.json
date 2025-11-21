@@ -1,0 +1,25 @@
+{
+  "name": "slack-agent",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "npx tsx index.ts"
+  },
+  "dependencies": {
+    "@kadi.build/core": "^0.0.1-alpha.12",
+    "@slack/bolt": "^3.19.0",
+    "dotenv": "^16.4.0",
+    "openai": "^6.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

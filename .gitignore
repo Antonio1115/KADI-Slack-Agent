@@ -1,0 +1,69 @@
+# -------------------------
+# Node / TypeScript
+# -------------------------
+node_modules/
+dist/
+*.tsbuildinfo
+
+# -------------------------
+# Environment Files
+# -------------------------
+.env
+.env.local
+.env.*.local
+
+# -------------------------
+# Logs
+# -------------------------
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+*.log
+
+# -------------------------
+# OS Artifacts
+# -------------------------
+.DS_Store
+Thumbs.db
+
+# -------------------------
+# Editor Settings
+# -------------------------
+.vscode/
+.idea/
+*.swp
+
+# -------------------------
+# Kadi / MCP Build Artifacts
+# -------------------------
+abilities/
+.mcp/
+kadi-out/
+kadi-temp/
+kadi-cache/
+kadi.lock
+
+# -------------------------
+# Compiled Output (ESM)
+# -------------------------
+*.js
+*.js.map
+
+# BUT keep TypeScript source
+!index.ts
+
+# -------------------------
+# Temporary files
+# -------------------------
+*.tmp
+*.bak
+*.old
+
+# -------------------------
+# GitHub Metadata (optional)
+# -------------------------
+.github/*
+!.github/ISSUE_TEMPLATE/
+!.github/PULL_REQUEST_TEMPLATE/

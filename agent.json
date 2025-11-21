@@ -1,0 +1,19 @@
+{
+  "name": "slack-agent",
+  "kind": "agent",
+  "version": "0.0.1",
+  "license": "MIT",
+  "description": "Listens to Slack events via Bolt SDK and publishes them to the broker.",
+  "brokers": {
+    "local": "ws://127.0.0.1:8080"
+  },
+  "defaultBroker": "local",
+  "scripts": {
+    "setup": "npm install && npm run build",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "npx tsx index.ts",
+    "clean": "rm -rf node_modules dist"
+  },
+  "cliPlugins": {}
+}
