@@ -10,6 +10,79 @@ const brokerUrl = process.env.BROKER_URL || "ws://localhost:8080";
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /* ---------------------------------------------------------
+   Rate Limiting & Throttling
+   - Tracks user activity to prevent abuse
+   - Enforces cooldown between tool calls
+   - Limits requests per time window
+--------------------------------------------------------- */
+
+interface UserRateLimit {
+  lastToolCallTime: number;
+  messageCount: number;
+  messageWindowStart: number;
+}
+
+const userRateLimits = new Map<string, UserRateLimit>();
+const TOOL_CALL_COOLDOWN_MS = 2000; // 2 seconds between tool calls per user
+const MAX_MESSAGES_PER_MINUTE = 20; // 20 messages per minute per user
+const MESSAGE_WINDOW_MS = 60000; // 1 minute window
+
+function checkRateLimit(userId: string): { allowed: boolean; reason?: string } {
+  const now = Date.now();
+  let limit = userRateLimits.get(userId);
+
+  if (!limit) {
+    limit = {
+      lastToolCallTime: 0,
+      messageCount: 1,
+      messageWindowStart: now,
+    };
+    userRateLimits.set(userId, limit);
+    return { allowed: true };
+  }
+
+  // Check message rate limit
+  if (now - limit.messageWindowStart > MESSAGE_WINDOW_MS) {
+    limit.messageCount = 1;
+    limit.messageWindowStart = now;
+  } else {
+    limit.messageCount++;
+    if (limit.messageCount > MAX_MESSAGES_PER_MINUTE) {
+      return {
+        allowed: false,
+        reason: "Rate limit exceeded: max 20 messages per minute",
+      };
+    }
+  }
+
+  userRateLimits.set(userId, limit);
+  return { allowed: true };
+}
+
+function checkToolCallThrottle(userId: string): { allowed: boolean; reason?: string } {
+  const now = Date.now();
+  let limit = userRateLimits.get(userId);
+
+  if (!limit) {
+    limit = { lastToolCallTime: now, messageCount: 0, messageWindowStart: now };
+    userRateLimits.set(userId, limit);
+    return { allowed: true };
+  }
+
+  const timeSinceLastTool = now - limit.lastToolCallTime;
+  if (timeSinceLastTool < TOOL_CALL_COOLDOWN_MS) {
+    return {
+      allowed: false,
+      reason: `Tool calls are throttled: wait ${Math.ceil((TOOL_CALL_COOLDOWN_MS - timeSinceLastTool) / 1000)} seconds`,
+    };
+  }
+
+  limit.lastToolCallTime = now;
+  userRateLimits.set(userId, limit);
+  return { allowed: true };
+}
+
+/* ---------------------------------------------------------
    Helper: Send a DM diagnostic using Slack API directly
    - This tests whether the Slack bot token works
    - Uses conversations.open to open a DM channel to a user
@@ -36,7 +109,7 @@ async function sendDM(slackApp: any, userId: string, text: string) {
 --------------------------------------------------------- */
 
 async function main() {
-  console.log("🚀 Starting Slack Agent with OpenAI + MCP...");
+  console.log("Starting Slack Agent with OpenAI + MCP...");
 
   // Load secret-ability
   const secretClient = new KadiClient({
@@ -69,11 +142,11 @@ async function main() {
     const auth = await slackApp.client.auth.test();
     const botUserId = auth.user_id;
     const targetUser = process.env.SLACK_TEST_USER_ID || botUserId;
-    console.log(`🧪 Sending startup DM diagnostic to ${targetUser}...`);
-    await sendDM(slackApp, targetUser!, "✅ Slack agent online and ready!");
+    console.log(`Sending startup DM diagnostic to ${targetUser}...`);
+    await sendDM(slackApp, targetUser!, "Slack agent online and ready!");
     console.log("DM diagnostic succeeded.");
   } catch (err: any) {
-    console.error("❌ Startup DM failed:", err.data || err);
+    console.error("Startup DM failed:", err.data || err);
   }
 
   /* ---------------------------------------------------------
@@ -91,7 +164,7 @@ async function main() {
   });
 
   await (client as any).connect();
-  console.log(`🌐 Connected to broker at ${brokerUrl}`);
+  console.log(`Connected to broker at ${brokerUrl}`);
 
   const protocol = (client as any).getBrokerProtocol();
 
@@ -108,7 +181,7 @@ async function main() {
     try {
       const networks = (client as any).networks || ["global"];
       const agents = await (protocol as any).discoverAgents(networks);
-      console.log(`🔎 Found ${agents.length} agents`);
+      console.log(`Found ${agents.length} agents`);
 
       // Query each agent for its tools and cache them
       for (const agent of agents) {
@@ -116,14 +189,14 @@ async function main() {
         toolsCache.set(agent.name, capabilities || []);
       }
 
-      console.log(" Cached Slack MCP tools:");
+      console.log("Cached Slack MCP tools:");
       for (const [agentName, caps] of toolsCache.entries()) {
         for (const t of caps) {
           console.log(`  - ${agentName}/${t.name}`);
         }
       }
     } catch (err) {
-      console.error(" Capability fetch failed:", err);
+      console.error("Capability fetch failed:", err);
     }
   }
 
@@ -152,11 +225,11 @@ async function fetchChannelsFromMCP() {
     const listTool = tools.find((t: any) => t.name === "slack_channels_list");
 
     if (!listTool) {
-      console.log(" No slack_channels_list tool found — cannot preload channels.");
+      console.log("No slack_channels_list tool found — cannot preload channels.");
       return;
     }
 
-    console.log(" Fetching channels from Slack MCP…");
+    console.log("Fetching channels from Slack MCP...");
 
     // Request full channel list
     const response = await protocol.invokeTool({
@@ -170,7 +243,7 @@ async function fetchChannelsFromMCP() {
     });
 
     if (!response?.result) {
-      console.log(" Channel fetch returned no result.");
+      console.log("Channel fetch returned no result.");
       return;
     }
 
@@ -180,7 +253,7 @@ async function fetchChannelsFromMCP() {
     const isCSV = raw.startsWith("ID,") || raw.includes("\n");
 
     if (!isCSV) {
-      console.log(" channels_list returned non-CSV data:", raw);
+      console.log("channels_list returned non-CSV data:", raw);
       return;
     }
 
@@ -200,13 +273,13 @@ async function fetchChannelsFromMCP() {
     // Save final parsed list
     cachedChannels = parsedChannels;
 
-    console.log(` Cached ${cachedChannels.length} Slack channels:`);
+    console.log(`Cached ${cachedChannels.length} Slack channels:`);
     cachedChannels.forEach((ch) =>
-      console.log(`   • ${ch.ID} — ${ch.Name}`)
+      console.log(`  - ${ch.ID}: ${ch.Name}`)
     );
 
   } catch (err) {
-    console.error(" Failed to preload channels:", err);
+    console.error("Failed to preload channels:", err);
   }
 }
 
@@ -308,8 +381,8 @@ Your job is to decide:
     try {
       parsed = JSON.parse(raw);
     } catch {
-      console.error(" Invalid JSON from LLM:", raw);
-      await say(" I couldn't parse the assistant's response.");
+      console.error("Invalid JSON from LLM:", raw);
+      await say("I couldn't parse the assistant's response.");
       return;
     }
 
@@ -324,20 +397,20 @@ Your job is to decide:
     const toolInput = parsed.input || {};
 
     if (!toolName) {
-      await say("🤔 I'm not sure which tool to call.");
+      await say("I'm not sure which tool to call.");
       return;
     }
 
     // If missing channel_id, inject the current Slack channel automatically
     if (!toolInput.channel_id && channelId) {
       toolInput.channel_id = channelId;
-      console.log("🔧 Injected channel_id:", channelId);
+      console.log("Injected channel_id:", channelId);
     }
 
     // Ensure the requested tool actually exists
     const toolDefinition = slackTools.find((t: any) => t.name === toolName);
     if (!toolDefinition) {
-      await say(`❌ Tool "${toolName}" not available.`);
+      await say(`Tool "${toolName}" not available.`);
       return;
     }
 
@@ -348,6 +421,13 @@ Your job is to decide:
        - If "summarize" is in user input, runs a second LLM call to summarize
        - Sends final content back to Slack
     --------------------------------------------------------- */
+
+    // Check tool call throttle before executing
+    const throttleCheck = checkToolCallThrottle(user);
+    if (!throttleCheck.allowed) {
+      await say(`Throttle: ${throttleCheck.reason}`);
+      return;
+    }
 
     try {
   if (toolInput.content_type === "text") {
@@ -366,7 +446,7 @@ Your job is to decide:
 
   // If there is no returned data, just acknowledge success
   if (!raw) {
-    await say(`✅ Tool "${toolName}" executed.`);
+    await say(`Tool "${toolName}" executed.`);
     return;
   }
 
@@ -401,14 +481,14 @@ Your job is to decide:
 
   // Otherwise, return raw parsed result
   await say(
-    "📄 Tool Result:\n```json\n" +
+    "Tool Result:\n```json\n" +
       (typeof parsed === "string" ? parsed : JSON.stringify(parsed, null, 2)) +
       "\n```"
   );
 
 } catch (err: any) {
-  console.error("❌ Tool error:", err);
-  await say(`⚠️ Tool call failed: ${err.message || String(err)}`);
+  console.error("Tool error:", err);
+  await say(`Tool call failed: ${err.message || String(err)}`);
 }
 
   }
@@ -423,10 +503,17 @@ Your job is to decide:
     const user = event.user ?? "unknown";
     if (user === botUserId || (event as any).bot_id) return;
 
+    // Check rate limit for general messages
+    const rateCheck = checkRateLimit(user);
+    if (!rateCheck.allowed) {
+      await say(`Rate limit: ${rateCheck.reason}`);
+      return;
+    }
+
     const mentionRegex = new RegExp(`<@${botUserId}>`, "g");
     const cleanedText = (event.text || "").replace(mentionRegex, "").trim();
 
-    console.log(`💬 Mention from ${user}: ${cleanedText}`);
+    console.log(`Mention from ${user}: ${cleanedText}`);
     await handleSlackInput(cleanedText, user, say, event.channel);
   });
 
@@ -442,7 +529,14 @@ Your job is to decide:
       const text = (message as any).text || "";
       const channelId = (message as any).channel;
 
-      console.log(`💬 DM from ${user}: ${text}`);
+      // Check rate limit for general messages
+      const rateCheck = checkRateLimit(user);
+      if (!rateCheck.allowed) {
+        await say(`Rate limit: ${rateCheck.reason}`);
+        return;
+      }
+
+      console.log(`DM from ${user}: ${text}`);
 
       // Default behaviour — pass to LLM + MCP pipeline
       await handleSlackInput(text, user, say, channelId);
@@ -454,10 +548,10 @@ Your job is to decide:
      - Required for Slack events to be received
 --------------------------------------------------------- */
   await slackApp.start();
-  console.log("⚡ Slack Agent is running!");
+  console.log("Slack Agent is running!");
 }
 
 main().catch((err) => {
-  console.error("❌ Fatal Error:", err);
+  console.error("Fatal Error:", err);
   process.exit(1);
 });

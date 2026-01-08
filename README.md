@@ -1,4 +1,4 @@
-# Slack Agent — Kadi MCP + Slack Bolt + OpenAI
+# Slack Agent - Kadi MCP + Slack Bolt + OpenAI
 
 This is a TypeScript agent that connects Slack to the Kadi MCP broker and OpenAI. It listens to messages in your Slack workspace, processes them through a language model, and executes MCP tools based on what people are asking for.
 
