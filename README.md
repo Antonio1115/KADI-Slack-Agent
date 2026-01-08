@@ -24,12 +24,16 @@ What this gives you is essentially a conversational interface to your entire MCP
 
 ```
 slack-agent/
-  ├── index.ts               # Main TypeScript entrypoint
-  ├── package.json           # Node dependencies + scripts
-  ├── tsconfig.json          # TypeScript compiler config
-  ├── agent.json             # Kadi agent metadata & CLI configuration
-  ├── README.md              # This documentation
-  └── dist/                  # Compiled JavaScript output (generated)
+  ├── src/
+  │   ├── index.ts            # Entrypoint
+  │   ├── handlers/           # Slack event + message routing
+  │   ├── services/           # KADI client + capability cache
+  │   └── utils/              # Rate limiting helpers
+  ├── package.json            # Node dependencies + scripts
+  ├── tsconfig.json           # TypeScript compiler config
+  ├── agent.json              # Kadi agent metadata & CLI configuration
+  ├── README.md               # This documentation
+  └── dist/                   # Compiled JavaScript output (generated)
 ```
 
 ---
@@ -71,40 +75,33 @@ Socket Mode is important here because it means the agent doesn't need a public H
 
 ### Connection to the Kadi MCP Broker
 
-The agent creates a client that connects to the broker:
+The agent creates a client and connects to the broker using the single `broker` field:
 
 ```ts
 const client = new KadiClient({
   name: "slack-agent",
-  role: "agent",
-  transport: "broker",
-  brokers: { local: brokerUrl },
-  defaultBroker: "local",
+  broker: process.env.KADI_BROKER_URL || "ws://localhost:8080/kadi",
 });
+
+await client.connect();
 ```
 
-This connection is what gives the agent its power. Once connected, it can discover what other MCP agents are available, query their capabilities, and cache information about their tools. The LLM uses this cached list to figure out which tools are available and how to call them.
-
-The agent refreshes this discovery process every five minutes, so if you add new agents or tools, they'll become available without needing to restart the Slack agent.
+Tools from the Slack MCP upstream are not loaded as KADI abilities; they are invoked directly via the broker protocol using `targetAgent: "upstream:slack"`.
 
 ---
 
 ### Slack Channel Preloading via MCP
 
-Slack channels are fetched using the `slack_channels_list` MCP tool:
+Slack channels are fetched via the broker using the Slack upstream:
 
 ```ts
-await protocol.invokeTool({
-  targetAgent: "Slack MCP Server",
-  toolName: "slack_channels_list",
-  toolInput: {
-    channel_types: "public_channel,private_channel,im,mpim",
-    limit: 999,
-  },
+await ability.invoke("slack_channels_list", {
+  channel_types: "public_channel,private_channel,im,mpim",
+  limit: 999,
 });
 ```
 
-This preloading step is more important than it might seem. By having the full channel list available, the LLM can reference channels by their actual names instead of trying to guess channel IDs. This prevents it from hallucinating channel IDs that don't exist, and it helps enforce the safety rules we've built into the system prompt.
+The agent waits for the asynchronous `kadi.ability.response` notification from the broker to get the actual tool result (the broker first returns a pending status). Preloading gives the LLM accurate channel names/IDs and avoids hallucinated IDs.
 
 ---
 
@@ -234,16 +231,19 @@ kadi run slack-agent start
 
 Here's what happens when someone sends the bot a message:
 
-1. The agent builds a system prompt that includes all the available tools, channel information, and safety rules
-2. It sends that prompt along with the user's message to OpenAI, requesting structured JSON output
-3. OpenAI returns either an `"answer"` (for direct responses) or a `"tool"` with structured input (for MCP tool calls)
-4. If it's a tool call:
-   - The agent injects the channel ID if it's missing (using the context from Slack)
-   - It verifies that the tool actually exists in the capabilities cache
-   - It invokes the tool through the broker protocol
-   - The results get formatted and sent back to the Slack channel
+1. The agent builds a system prompt that includes the Slack upstream tools, channel information, and safety rules
+2. It asks OpenAI for structured JSON: either `{ "answer": ... }` or a `{ "tool": ..., "input": ... }` payload
+3. For tool calls, the agent injects the channel ID when missing and invokes via `targetAgent: "upstream:slack"`
+4. The broker returns `{status: "pending", requestId: "..."}` immediately; the agent then waits for `kadi.ability.response` with the actual result
+5. Results are formatted and posted back to Slack
 
-What you end up with is Slack acting as a natural-language interface to your entire MCP ecosystem. People on your team can ask questions or request actions without needing to know the underlying API structures.
+This makes Slack a natural-language front end for MCP without exposing internal APIs to end users.
+
+---
+
+## Known Issues
+
+No known blocking issues. Tool invocations now wait for `kadi.ability.response` and return the actual results.
 
 ---
 

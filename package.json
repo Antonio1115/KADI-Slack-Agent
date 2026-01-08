@@ -6,10 +6,10 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "npx tsx index.ts"
+    "dev": "npx tsx src/index.ts"
   },
   "dependencies": {
-    "@kadi.build/core": "^0.0.1-alpha.12",
+    "@kadi.build/core": "^0.0.1-alpha.15",
     "@slack/bolt": "^3.19.0",
     "dotenv": "^16.4.0",
     "openai": "^6.8.1"
