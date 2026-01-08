@@ -1,31 +1,26 @@
 # Slack Agent — Kadi MCP + Slack Bolt + OpenAI
 
-This repository contains a TypeScript-based agent that bridges **Slack**, the **Kadi MCP broker**, and **OpenAI**.  
-The agent listens to Slack messages, routes them through an LLM, and dynamically executes MCP tools depending on user intent.
+This is a TypeScript agent that connects Slack to the Kadi MCP broker and OpenAI. It listens to messages in your Slack workspace, processes them through a language model, and executes MCP tools based on what people are asking for.
 
-This README fully documents the architecture, setup, environment variables, runtime behavior, and development workflow.
-
----
-
-# 🔧 Overview
-
-The Slack Agent acts as a real-time automation bridge:
-
-- Receives Slack events using **Slack Bolt Socket Mode**.
-- Connects to the **Kadi MCP broker** to:
-  - Discover all tools exposed by other agents.
-  - Query and invoke MCP tools dynamically.
-- Preloads the Slack workspace channel list via MCP (`slack_channels_list` tool).
-- Uses **OpenAI** to interpret user messages and decide:
-  - Whether to **answer directly** in Slack.
-  - Or call an **MCP tool**, passing structured JSON input.
-- Executes tool calls and sends responses back into Slack.
-
-This architecture allows Slack to act as a natural-language control panel for your distributed MCP tools.
+This documentation walks through the architecture, how to set it up, what environment variables you need, how it behaves at runtime, and the development workflow you'll follow.
 
 ---
 
-# 📁 Project Structure
+## Overview
+
+Think of this agent as a real-time automation layer that sits between your team's Slack workspace and your MCP tools:
+
+- It receives Slack events through Socket Mode (so you don't need to expose any public endpoints)
+- It maintains a connection to the Kadi MCP broker, which gives it access to all the tools other agents have registered
+- On startup, it fetches your workspace's channel list using the `slack_channels_list` MCP tool
+- When someone messages the bot, it asks OpenAI to figure out whether to respond directly or call an MCP tool
+- If a tool needs to be called, it handles the invocation and sends the results back to Slack
+
+What this gives you is essentially a conversational interface to your entire MCP ecosystem. Your team can interact with distributed tools using natural language in Slack.
+
+---
+
+## Project Structure
 
 ```
 slack-agent/
@@ -39,27 +34,27 @@ slack-agent/
 
 ---
 
-# ⚙️ Technology Stack
+## Technology Stack
 
-### Runtime / Language
-- **Node.js ≥18**
-- **TypeScript 5**
-- **ESM modules** (`type: "module"`)
+**Runtime and Language**
+- Node.js version 18 or later
+- TypeScript 5
+- ESM modules (the package.json has `"type": "module"`)
 
-### Core Libraries
-- **Slack Bolt SDK** — event handling, commands, socket mode.
-- **Kadi MCP Core** — connects to the broker, discovers MCP agents and tools.
-- **OpenAI SDK** — LLM reasoning for routing and summarization.
-- **dotenv** — environment variable loading.
-- **tsx** — runs TS directly for development.
+**Core Libraries**
+- Slack Bolt SDK handles all the event processing, commands, and socket mode connections
+- Kadi MCP Core manages the connection to the broker and handles tool discovery and invocation
+- OpenAI SDK provides the LLM reasoning that routes requests and summarizes responses
+- dotenv loads environment variables from your `.env` file
+- tsx lets you run TypeScript files directly during development
 
 ---
 
-# 🧩 Detailed Architecture
+## Detailed Architecture
 
-## 1. Slack Initialization
+### Slack Initialization
 
-The agent starts by configuring a Bolt `App`:
+When the agent starts up, it initializes a Bolt app like this:
 
 ```ts
 const slackApp = new App({
@@ -70,16 +65,13 @@ const slackApp = new App({
 });
 ```
 
-### Features
-- Socket Mode ensures the agent does **not** need a public HTTP endpoint.
-- On startup, the bot sends a **diagnostic DM** to verify credentials.
-- All Slack events are handled in real time.
+Socket Mode is important here because it means the agent doesn't need a public HTTP endpoint—everything happens over a WebSocket connection. When the bot starts, it sends a diagnostic direct message to verify that credentials are working. From that point on, it handles all Slack events in real time.
 
 ---
 
-## 2. Connection to the Kadi MCP Broker
+### Connection to the Kadi MCP Broker
 
-The agent creates a client:
+The agent creates a client that connects to the broker:
 
 ```ts
 const client = new KadiClient({
@@ -91,17 +83,13 @@ const client = new KadiClient({
 });
 ```
 
-### Responsibilities
-- Connect to the MCP broker via WebSocket.
-- Discover all other MCP agents.
-- Query and cache their available tools.
-- Allow the LLM to reliably invoke these tools.
+This connection is what gives the agent its power. Once connected, it can discover what other MCP agents are available, query their capabilities, and cache information about their tools. The LLM uses this cached list to figure out which tools are available and how to call them.
 
-A refresh runs every **5 minutes**, ensuring updated tool discovery without restarting.
+The agent refreshes this discovery process every five minutes, so if you add new agents or tools, they'll become available without needing to restart the Slack agent.
 
 ---
 
-## 3. Slack Channel Preloading via MCP
+### Slack Channel Preloading via MCP
 
 Slack channels are fetched using the `slack_channels_list` MCP tool:
 
@@ -116,29 +104,21 @@ await protocol.invokeTool({
 });
 ```
 
-### Why preload channels?
-
-This allows the LLM to:
-
-- Reference channels by **name** instead of ID.
-- Avoid hallucinating channel IDs.
-- Follow safety rules enforced in the system prompt.
+This preloading step is more important than it might seem. By having the full channel list available, the LLM can reference channels by their actual names instead of trying to guess channel IDs. This prevents it from hallucinating channel IDs that don't exist, and it helps enforce the safety rules we've built into the system prompt.
 
 ---
 
-## 4. LLM-Based Routing System
+### LLM-Based Routing System
 
-The LLM decides what to do:
+When someone sends a message to the bot, the LLM looks at it and decides how to respond. There are two paths it can take:
 
-### Option A — Respond directly  
-Example JSON:
+**Direct response** — If the request is straightforward or informational, the LLM just answers directly:
 
 ```json
 { "answer": "Here is the explanation..." }
 ```
 
-### Option B — Call an MCP Tool  
-Example JSON:
+**MCP tool invocation** — If the request needs action (like posting a message to a channel, searching for information, or running some computation), it calls an MCP tool:
 
 ```json
 {
@@ -147,68 +127,60 @@ Example JSON:
 }
 ```
 
-### Safety Rules in System Prompt
-The LLM is explicitly instructed to:
-
-- Use **only** known channels.
-- Use **only** MCP tools that exist.
-- Never invent agent names.
-- Always return valid JSON objects.
-
-This ensures reliable and deterministic behavior in Slack.
+The system prompt includes explicit safety rules to keep things reliable. The LLM is told to only use channels that actually exist, only call tools that are available in the capabilities list, never invent agent names, and always return valid JSON. This keeps the behavior deterministic and prevents the kind of hallucination issues you'd run into otherwise.
 
 ---
 
-## 5. Slack Event Listeners
+### Slack Event Listeners
 
-### Mentions (`@bot`)
-Triggered when the bot is tagged:
+The agent listens for two types of Slack events:
+
+**Mentions** - When someone tags the bot with `@bot` in a channel:
 
 ```ts
 slackApp.event("app_mention", ...)
 ```
 
-### Direct Messages
-Triggered when the bot receives a DM:
+**Direct Messages** - When someone sends the bot a DM:
 
 ```ts
 slackApp.message(async ({ message, say }) => ...)
 ```
 
-Both pass their text directly to the LLM routing logic.
+Both of these just extract the text from the message and pass it along to the LLM routing logic. The routing system then figures out what to do next.
 
 ---
 
-# 🧪 Development Workflow
+## Development Workflow
 
-## Install Dependencies
+**Install Dependencies**
 
 ```
 npm install
 ```
 
-## Run in Dev Mode (TypeScript directly)
+**Run in Dev Mode (TypeScript directly)**
 
 ```
 npm run dev
 ```
 
-Uses `tsx` → no compilation step required.
+This uses `tsx` so there's no compilation step—you can just edit TypeScript files and restart the process.
 
-## Build & Run Production Mode
+**Build and Run Production Mode**
 
 ```
 npm run build
 npm start
 ```
 
-Builds to `dist/index.js` using `tsc`.
+This compiles everything to `dist/index.js` using TypeScript's compiler, then runs the compiled JavaScript.
 
 ---
 
-# 🌱 Environment Variables
+## Environment Variables
 
-You **must** create a `.env` file:
+You'll need to create a `.env` file in the project root with these variables:
 
 ```env
 # Slack configuration
@@ -224,9 +196,9 @@ BROKER_URL=ws://localhost:8080
 OPENAI_API_KEY=sk-...
 ```
 
-### Required Slack Scopes
+**Required Slack Scopes**
 
-Your Slack bot should have:
+When you set up your Slack app, make sure it has these OAuth scopes:
 
 - `chat:write`
 - `channels:history`
@@ -236,20 +208,20 @@ Your Slack bot should have:
 - `mpim:write`
 - `app_mentions:read`
 
-And **Socket Mode must be enabled**.
+You also need to enable Socket Mode in your Slack app settings. Without Socket Mode, the bot won't be able to receive events.
 
 ---
 
-# 🛠 Scripts Reference
+## Scripts Reference
 
-### From `package.json`
+**From package.json**
 ```
 npm run build    → compile TypeScript
 npm run start    → run dist/index.js
 npm run dev      → run index.ts with tsx
 ```
 
-### From `agent.json` (Kadi CLI)
+**From agent.json (Kadi CLI)**
 ```
 kadi run slack-agent setup
 kadi run slack-agent dev
@@ -258,61 +230,51 @@ kadi run slack-agent start
 
 ---
 
-# 🧵 How Tool Calls Work in Detail
+## How Tool Calls Work in Detail
 
-When the agent receives a Slack message:
+Here's what happens when someone sends the bot a message:
 
-1. Build a strict system prompt  
-2. Query OpenAI with `response_format: json_object`  
-3. Validate if result contains:
-   - `"answer"` → reply directly
-   - `"tool"` → call MCP tool
-4. If tool:
-   - Inject channel_id if missing
-   - Ensure tool exists in capabilities
-   - Run tool via broker protocol
-   - Return results JSON → Slack
+1. The agent builds a system prompt that includes all the available tools, channel information, and safety rules
+2. It sends that prompt along with the user's message to OpenAI, requesting structured JSON output
+3. OpenAI returns either an `"answer"` (for direct responses) or a `"tool"` with structured input (for MCP tool calls)
+4. If it's a tool call:
+   - The agent injects the channel ID if it's missing (using the context from Slack)
+   - It verifies that the tool actually exists in the capabilities cache
+   - It invokes the tool through the broker protocol
+   - The results get formatted and sent back to the Slack channel
 
-This transforms Slack into a natural-language command hub for MCP.
+What you end up with is Slack acting as a natural-language interface to your entire MCP ecosystem. People on your team can ask questions or request actions without needing to know the underlying API structures.
 
 ---
 
-# 🐛 Troubleshooting
+## Troubleshooting
 
-### ❗ “Cannot find module src/index.ts”
-Fix your `dev` script:
+**"Cannot find module src/index.ts"**
+
+Your dev script is pointing to the wrong path. Update it in package.json:
 
 ```json
 "dev": "npx tsx index.ts"
 ```
 
-### ❗ Bolt auth test failing
-Check Slack tokens in `.env`.
+**Bolt auth test failing**
 
-### ❗ “Broker connection refused”
-Ensure Kadi MCP broker is running:
+Double-check the Slack tokens in your `.env` file. Make sure you're using the bot token (starts with `xoxb-`), not a user token.
+
+**"Broker connection refused"**
+
+The MCP broker might not be running. Start it with:
 
 ```
 kadi run broker dev
 ```
 
-### ❗ No MCP tools showing up
-Verify that **Slack MCP Server** agent is running.
+**No MCP tools showing up**
+
+Make sure the Slack MCP Server agent is actually running. The Slack agent depends on it for channel operations.
 
 ---
 
-# 📜 License
-MIT License. See `package.json`.
+## License
 
----
-
-# 🧭 Future Enhancements (Optional Ideas)
-
-- Add internal caching to reduce repeated OpenAI calls.
-- Add support for multiprompt + tools ranking.
-- Provide analytics Dashboard for message routing.
-- Add retry logic for MCP tool failures.
-
----
-
-If you need this README customized, branded, or expanded into a full onboarding guide, I can generate that too.
+MIT License. See package.json for details.

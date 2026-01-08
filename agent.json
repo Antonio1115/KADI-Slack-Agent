@@ -4,6 +4,9 @@
   "version": "0.0.1",
   "license": "MIT",
   "description": "Listens to Slack events via Bolt SDK and publishes them to the broker.",
+  "abilities":{
+    "secret-ability": "0.0.1"
+  },
   "brokers": {
     "local": "ws://127.0.0.1:8080"
   },

@@ -38,13 +38,25 @@ async function sendDM(slackApp: any, userId: string, text: string) {
 async function main() {
   console.log("🚀 Starting Slack Agent with OpenAI + MCP...");
 
+  // Load secret-ability
+  const secretClient = new KadiClient({
+    name: "slack-agent"
+  });
+  const secrets = await secretClient.load('secret-ability', 'native');
+  await secrets.init({ vaults: [] });
+
+  // Get Slack tokens from vault (fallback to env vars)
+  const slackTokenResult = await secrets.get({ key: 'SLACK_BOT_TOKEN' });
+  const slackSigningResult = await secrets.get({ key: 'SLACK_SIGNING_SECRET' });
+  const slackAppTokenResult = await secrets.get({ key: 'SLACK_APP_TOKEN' });
+
   // Initialize Slack Bolt App (Socket Mode)
   // This allows the bot to receive Slack events in real-time
   const slackApp = new App({
-    token: process.env.SLACK_BOT_TOKEN!,
-    signingSecret: process.env.SLACK_SIGNING_SECRET!,
+    token: slackTokenResult.value || process.env.SLACK_BOT_TOKEN!,
+    signingSecret: slackSigningResult.value || process.env.SLACK_SIGNING_SECRET!,
     socketMode: true,
-    appToken: process.env.SLACK_APP_TOKEN!,
+    appToken: slackAppTokenResult.value || process.env.SLACK_APP_TOKEN!,
   });
 
   /* ---------------------------------------------------------
@@ -297,7 +309,7 @@ Your job is to decide:
       parsed = JSON.parse(raw);
     } catch {
       console.error(" Invalid JSON from LLM:", raw);
-      await say(" I couldn’t parse the assistant's response.");
+      await say(" I couldn't parse the assistant's response.");
       return;
     }
 
@@ -312,7 +324,7 @@ Your job is to decide:
     const toolInput = parsed.input || {};
 
     if (!toolName) {
-      await say("🤔 I’m not sure which tool to call.");
+      await say("🤔 I'm not sure which tool to call.");
       return;
     }
 
